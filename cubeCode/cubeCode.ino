@@ -1,37 +1,54 @@
-#define BLINKY_DIAG        0
-#define CUBE_DIAG          0
-#define COMM_LED_PIN       2
-#define RST_BUTTON_PIN     3
 #include <BlinkyPicoW.h>
 #include <SPI.h>
 
-struct CubeSetting
+// --- Configuration Constants ---
+constexpr int BLINKY_DIAG    = 0;
+constexpr int CUBE_DIAG      = 0;
+constexpr int COMM_LED_PIN   = 2;
+constexpr int RST_BUTTON_PIN = 3;
+constexpr int NUMCHAN        = 3;
+
+constexpr int CS_PINS[NUMCHAN] = {17, 20, 21};
+
+// --- Data Structures ---
+struct CubeSetting 
 {
-  uint16_t publishInterval;
+  uint32_t publishInterval;
 };
+
+struct CubeReading 
+{
+  float temp[NUMCHAN];
+};
+
+struct CubeArm 
+{
+  bool temp[NUMCHAN];
+};
+
+// --- Global Variables ---
 CubeSetting setting;
-
-struct CubeReading
-{
-  int16_t tempA;
-  int16_t tempB;
-  int16_t tempC;
-};
 CubeReading reading;
+CubeReading readingLow;
+CubeReading readingHigh;
+CubeArm readingArm;
 
-unsigned long lastPublishTime;
-
-int csPin1 = 17;
-int csPin2 = 20;
-int csPin3 = 21;
-
-
+uint32_t lastPublishTime;
 SPISettings spiSettings;
 
-void setupBlinky()
+// --- Helper Functions ---
+template <typename T>
+inline bool outsideLimits(T current, T low, T high) 
 {
-  if (BLINKY_DIAG > 0) Serial.begin(9600);
+  return (current < low) || (current > high);
+}
 
+// --- Setup Functions ---
+void setupBlinky() 
+{
+  if (BLINKY_DIAG > 0) {Serial.begin(9600);}
+
+  // MQTT & Hardware Configuration
   BlinkyPicoW.setMqttKeepAlive(15);
   BlinkyPicoW.setMqttSocketTimeout(4);
   BlinkyPicoW.setMqttPort(1883);
@@ -41,22 +58,18 @@ void setupBlinky()
   BlinkyPicoW.begin(BLINKY_DIAG, COMM_LED_PIN, RST_BUTTON_PIN, true, sizeof(setting), sizeof(reading));
 }
 
-void setupCube()
-{
-  if (CUBE_DIAG > 0) Serial.begin(9600);
+void setupCube() {
+  if (BLINKY_DIAG < 1 && CUBE_DIAG > 0) {Serial.begin(9600);}
   setting.publishInterval = 4000;
   lastPublishTime = millis();
 
-  reading.tempA = 0;
-  reading.tempB = 0;
-  reading.tempC = 0;
-
-  pinMode(csPin1, OUTPUT);
-  digitalWrite(csPin1, HIGH);
-  pinMode(csPin2, OUTPUT);
-  digitalWrite(csPin2, HIGH);
-  pinMode(csPin3, OUTPUT);
-  digitalWrite(csPin3, HIGH);
+  for (int i = 0; i < NUMCHAN; ++i) 
+  {
+    reading.temp[i] = 0.0;
+    readingArm.temp[i] = true;
+    pinMode(CS_PINS[i], OUTPUT);
+    digitalWrite(CS_PINS[i], HIGH);
+  }
 
   spiSettings = SPISettings(2000000, MSBFIRST, SPI_MODE1);
   SPI.begin();
@@ -65,35 +78,55 @@ void setupCube()
 
 void loopCube()
 {
-  unsigned long now = millis();
+  const unsigned long now = millis();
   if ((now - lastPublishTime) > setting.publishInterval)
   {
-    
-    reading.tempA = (int16_t) getMAX31855Temperature(csPin1, spiSettings);
-    reading.tempB = (int16_t) getMAX31855Temperature(csPin2, spiSettings);
-    reading.tempC = (int16_t) getMAX31855Temperature(csPin3, spiSettings);
-    if (CUBE_DIAG > 0)
-    {
-      Serial.print("Raw Temps: ");
-      Serial.print(reading.tempA);
-      Serial.print(",");
-      Serial.print(reading.tempB);
-      Serial.print(",");
-      Serial.println(reading.tempC);
-    }
     lastPublishTime = now;
-    boolean successful = BlinkyPicoW.publishCubeData((uint8_t*) &setting, (uint8_t*) &reading, false);
-  }  
-  boolean newSettings = BlinkyPicoW.retrieveCubeSetting((uint8_t*) &setting);
-  if (newSettings)
-  {
-    if (setting.publishInterval < 1000) setting.publishInterval = 1000;
+    if (BlinkyPicoW.publishCubeData(reinterpret_cast<uint8_t*>(&setting), reinterpret_cast<uint8_t*>(&reading), false)) 
+    {
+      for (int i = 0; i < NUMCHAN; ++i) 
+      {
+        if (!outsideLimits(reading.temp[i], readingLow.temp[i], readingHigh.temp[i])) 
+        {
+          readingArm.temp[i] = true;
+        }
+      }
+    }  
   }
-  
+  for (int i = 0; i < NUMCHAN; ++i) 
+  {
+    reading.temp[i] = getMAX31855Temperature(CS_PINS[i], spiSettings);
+
+    if (outsideLimits(reading.temp[i], readingLow.temp[i], readingHigh.temp[i])) 
+    {
+      if (readingArm.temp[i]) 
+      {
+        const bool published = BlinkyPicoW.publishCubeData(
+          reinterpret_cast<uint8_t*>(&setting), 
+          reinterpret_cast<uint8_t*>(&reading), 
+          true
+        );
+        
+        readingArm.temp[i] = !published;
+        if (published) 
+        {
+          lastPublishTime = now;
+        }
+      }
+    }
+  }
+  // Check for New MQTT Settings
+  const bool newSettings = BlinkyPicoW.retrieveCubeSetting(
+    reinterpret_cast<uint8_t*>(&setting), 
+    reinterpret_cast<uint8_t*>(&readingLow), 
+    reinterpret_cast<uint8_t*>(&readingHigh)
+  );
+  if (newSettings) 
+  {
+    if (setting.publishInterval < 1000) setting.publishInterval = 500;
+  }  
 }
-
-
-int getMAX31855Temperature(int chipSelect, SPISettings spiSetup)
+float getMAX31855Temperature(int chipSelect, SPISettings spiSetup)
 {
   uint8_t  dataBufRead[4];
   int bits[32];
@@ -128,5 +161,6 @@ int getMAX31855Temperature(int chipSelect, SPISettings spiSetup)
   {
     iTemp = iTemp - 8192;
   }
-  return iTemp;
+  float ftemp = (((float) iTemp) - 2) / 4;
+  return ftemp;
 }
