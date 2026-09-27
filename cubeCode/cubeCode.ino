@@ -96,21 +96,23 @@ void loopCube()
   for (int i = 0; i < NUMCHAN; ++i) 
   {
     reading.temp[i] = getMAX31855Temperature(CS_PINS[i], spiSettings);
-
-    if (outsideLimits(reading.temp[i], readingLow.temp[i], readingHigh.temp[i])) 
-    {
-      if (readingArm.temp[i]) 
+    if (BlinkyPicoW.isInitialized())
+    {  
+      if (outsideLimits(reading.temp[i], readingLow.temp[i], readingHigh.temp[i])) 
       {
-        const bool published = BlinkyPicoW.publishCubeData(
-          reinterpret_cast<uint8_t*>(&setting), 
-          reinterpret_cast<uint8_t*>(&reading), 
-          true
-        );
-        
-        readingArm.temp[i] = !published;
-        if (published) 
+        if (readingArm.temp[i]) 
         {
-          lastPublishTime = now;
+          const bool published = BlinkyPicoW.publishCubeData(
+            reinterpret_cast<uint8_t*>(&setting), 
+            reinterpret_cast<uint8_t*>(&reading), 
+            true
+          );
+          
+          readingArm.temp[i] = !published;
+          if (published) 
+          {
+            lastPublishTime = now;
+          }
         }
       }
     }
