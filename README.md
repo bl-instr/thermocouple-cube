@@ -2,7 +2,9 @@
 
 **Three-channel, wireless K-type thermocouple measurement for bringing high-temperature process data into the Blinky-Lite control system.**
 
-<img src="thermocouple-cube.png" alt="thermocouple-cube" width="800"/>
+| Enclosure | PCB |     |
+|-----------|-----|-----|
+|<img src="thermocouple-cube.png" alt="thermocouple-cube" width="270"/>|<img src="thermocoupleTopPCB.png" alt="thermocoupleTopPCB" width="270"/>|<img src="thermocoupleBotPCB.png" alt="thermocoupleBotPCB" width="270"/>|
 
 ## Overview
 
